@@ -1,0 +1,1015 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Mouse Fun!</title>
+    <style>
+        html,
+        body {
+            margin: 0;
+            height: 100%;
+            overflow: hidden;
+            background: #111;
+            cursor: none;
+            font-family: "Comic Sans MS", "Chalkboard SE", sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #score {
+            position: fixed;
+            top: 16px;
+            left: 24px;
+            font-size: 48px;
+            color: #fff;
+            text-shadow: 3px 3px 0 #f0f;
+            user-select: none;
+        }
+
+        #start {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            color: #fff;
+            font-size: 64px;
+            background: rgba(0, 0, 0, .6);
+            cursor: pointer;
+            text-align: center;
+        }
+
+        #start small {
+            font-size: 28px;
+            margin-top: 20px;
+            opacity: .8;
+        }
+
+        #modes {
+            position: fixed;
+            top: 16px;
+            right: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            max-width: 70vw;
+            gap: 12px;
+        }
+
+        #modes button {
+            font: inherit;
+            font-size: 22px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            border: 4px solid #fff;
+            background: #333;
+            color: #fff;
+            cursor: pointer;
+        }
+
+        #modes button.active {
+            background: #f0f;
+        }
+
+        #rule {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: none;
+            align-items: center;
+            gap: 16px;
+            padding: 10px 28px;
+            border-radius: 40px;
+            border: 4px solid #fff;
+            background: rgba(0, 0, 0, .6);
+            color: #fff;
+            font-size: 44px;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        #rule.pop {
+            animation: pop .6s;
+        }
+
+        #rule .swatch {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            border: 3px solid #fff;
+        }
+
+        @keyframes pop {
+            50% {
+                transform: translateX(-50%) scale(1.4);
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <canvas id="c"></canvas>
+    <div id="score">⭐ 0</div>
+    <div id="modes">
+        <button data-mode="touch" class="active">👆 Touch</button>
+        <button data-mode="circle">⭕ Circle</button>
+        <button data-mode="hold">✋ Hold</button>
+        <button data-mode="dots">🔢 Dots</button>
+        <button data-mode="drag">🐶 Drag</button>
+        <button data-mode="pick">🎯 Pick</button>
+        <button data-mode="space">🚀 Space</button>
+        <button data-mode="alien">🛸 Alien</button>
+    </div>
+    <div id="rule"></div>
+    <div id="start">🖱️ Click to Play! 🎉<small>Move the mouse to catch the stars and friends!</small></div>
+    <script>
+        const canvas = document.getElementById('c');
+        const ctx = canvas.getContext('2d');
+        const scoreEl = document.getElementById('score');
+        let W, H;
+        function resize() { W = canvas.width = innerWidth; H = canvas.height = innerHeight; }
+        addEventListener('resize', resize);
+        resize();
+
+        const mouse = { x: W / 2, y: H / 2 };
+        const trail = [];
+        const particles = [];
+        const targets = [];
+        let score = 0;
+        let hue = 0;
+        let audio = null;
+        let running = false;
+        let mode = 'touch';
+        let dots = null;
+        let dotShape = 0;
+        let drag = null;
+        let rule = null;
+        let ruleCount = 0;
+        let space = null;
+        let invade = null;
+        const ruleEl = document.getElementById('rule');
+
+        const PICK_EMOJIS = [['🐶', 'dogs'], ['🐱', 'cats'], ['🍎', 'apples'], ['⭐', 'stars'], ['🐸', 'frogs'], ['🦋', 'butterflies'], ['🍓', 'strawberries'], ['🚀', 'rockets']];
+        const PICK_COLORS = [['red', 0], ['blue', 220], ['green', 120], ['yellow', 55], ['purple', 280]];
+
+        const EMOJIS = ['⭐', '🍎', '🐶', '🐱', '🦄', '🍓', '🎈', '🐸', '🌈', '🍌', '🐠', '🦋', '🚀', '🍩'];
+        const NOTES = [261.63, 293.66, 329.63, 392.0, 440.0, 523.25, 587.33, 659.25, 783.99]; // pentatonic-ish C major
+        const PAIRS = [['🐶', '🏠'], ['🐝', '🌻'], ['🐰', '🥕'], ['🐟', '🌊'], ['🐵', '🍌'], ['🚀', '🌙'], ['🐭', '🧀'], ['🐻', '🍯']];
+        const SHAPES = [
+            {
+                reward: '⭐', pts: Array.from({ length: 10 }, (_, i) => {
+                    const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 0.45 : 1;
+                    return [Math.cos(a) * r, Math.sin(a) * r];
+                })
+            },
+            { reward: '🏠', pts: [[-0.8, 1], [0.8, 1], [0.8, -0.1], [0, -0.9], [-0.8, -0.1]] },
+            {
+                reward: '❤️', pts: Array.from({ length: 10 }, (_, i) => {
+                    const a = i / 10 * Math.PI * 2;
+                    return [16 * Math.sin(a) ** 3 / 17, -(13 * Math.cos(a) - 5 * Math.cos(2 * a) - 2 * Math.cos(3 * a) - Math.cos(4 * a)) / 17];
+                })
+            },
+            { reward: '💎', pts: [[0, -1], [0.8, 0], [0, 1], [-0.8, 0]] },
+        ];
+
+        function resetMode() {
+            targets.length = 0;
+            dots = null;
+            drag = null;
+            rule = null;
+            space = null;
+            invade = null;
+            ruleEl.style.display = 'none';
+            if (mode === 'dots') newDots();
+            else if (mode === 'drag') newDrag();
+            else if (mode === 'pick') newRule();
+            else if (mode === 'space') newSpace(1);
+            else if (mode === 'alien') newInvade(1);
+            else for (let i = 0; i < 3; i++) spawnTarget();
+        }
+
+        function newSpace(level) {
+            const flip = level % 2 === 0;
+            const start = { x: W * (flip ? 0.88 : 0.12), y: H / 2 };
+            space = {
+                level,
+                state: 'ready',
+                until: 0,
+                lives: 4,
+                rocket: { x: start.x, y: start.y, angle: flip ? Math.PI : 0, inv: 0 },
+                moon: { x: W * (flip ? 0.12 : 0.88), y: H / 2, baseY: H / 2, r: 70 },
+                aliens: [
+                    { emoji: '👾', hue: 280, y: 140, phase: 0, x: W / 2, nextShot: 0, axis: 'x' },
+                    { emoji: '👽', hue: 120, y: H - 80, phase: Math.PI, x: W / 2, nextShot: 0, axis: 'x' },
+                    ...(level >= 3 ? [{ emoji: '🛸', hue: 190, x: W / 2, y: H / 2, phase: Math.PI / 2, nextShot: 0, axis: 'y' }] : []),
+                    ...(level >= 5 ? [{ emoji: '🤖', hue: 30, x: W * (flip ? 0.65 : 0.35), y: H / 2, phase: 0, nextShot: 0, axis: 'y' }] : []),
+                ],
+                bolts: [],
+                stars: makeStars(),
+            };
+        }
+
+        function makeStars() {
+            return Array.from({ length: 120 }, () => ({ x: Math.random() * W, y: Math.random() * H, s: 1 + Math.random() * 2, p: Math.random() * 6 }));
+        }
+
+        function newInvade(level) {
+            const flip = level % 2 === 0;
+            const baseY = H * 0.35;
+            invade = {
+                level,
+                state: 'ready',
+                until: performance.now() + 1500,
+                dir: flip ? -1 : 1,
+                rocket: { x: W * (flip ? 0.9 : 0.1), y: baseY, baseY, t: 0, angle: flip ? Math.PI : 0, flash: 0, size: 84 },
+                moon: { x: W * (flip ? 0.1 : 0.9), y: baseY, r: 70 },
+                player: { x: mouse.x, y: H - 90 },
+                shields: Math.min(2 + Math.floor(level / 3), 6),
+                maxShields: Math.min(2 + Math.floor(level / 3), 6),
+                bolts: [],
+                lastShot: 0,
+                stars: makeStars(),
+            };
+        }
+
+        function newRule() {
+            let next;
+            do {
+                const byColor = Math.random() < 0.5;
+                const list = byColor ? PICK_COLORS : PICK_EMOJIS;
+                const [value, name] = byColor ? list[Math.floor(Math.random() * list.length)].slice().reverse() : list[Math.floor(Math.random() * list.length)];
+                next = { byColor, value, name };
+            } while (rule && rule.value === next.value);
+            rule = next;
+            ruleCount = 0;
+
+            ruleEl.replaceChildren('Catch');
+            if (rule.byColor) {
+                const sw = document.createElement('span');
+                sw.className = 'swatch';
+                sw.style.background = `hsl(${rule.value},90%,55%)`;
+                ruleEl.append(sw);
+            } else {
+                ruleEl.append(rule.value);
+            }
+            ruleEl.style.display = 'flex';
+            ruleEl.classList.remove('pop');
+            void ruleEl.offsetWidth;
+            ruleEl.classList.add('pop');
+            if (window.speechSynthesis) {
+                speechSynthesis.cancel();
+                speechSynthesis.speak(new SpeechSynthesisUtterance(`Catch the ${rule.name}!`));
+            }
+
+            targets.length = 0;
+            for (let i = 0; i < 6; i++) spawnTarget();
+        }
+
+        document.querySelectorAll('#modes button').forEach(btn => btn.addEventListener('click', () => {
+            mode = btn.dataset.mode;
+            localStorage.setItem('mode', mode);
+            document.querySelectorAll('#modes button').forEach(b => b.classList.toggle('active', b === btn));
+            if (running) resetMode();
+        }));
+        document.querySelector(`#modes button[data-mode="${localStorage.getItem('mode')}"]`)?.click();
+
+        addEventListener('mousemove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+        addEventListener('touchmove', e => {
+            const t = e.touches[0]; mouse.x = t.clientX; mouse.y = t.clientY; e.preventDefault();
+        }, { passive: false });
+
+        addEventListener('pointerdown', e => {
+            mouse.x = e.clientX; mouse.y = e.clientY;
+            mouse.down = true;
+            if (drag && Math.hypot(mouse.x - drag.item.x, mouse.y - drag.item.y) < drag.item.r) {
+                drag.held = true;
+                playTick(0);
+            }
+        });
+        addEventListener('pointerup', () => {
+            mouse.down = false;
+            if (!drag || !drag.held) return;
+            drag.held = false;
+            if (Math.hypot(drag.item.x - drag.home.x, drag.item.y - drag.home.y) < drag.home.r) {
+                addScore(drag.home.x, drag.home.y, drag.hue);
+                celebrate();
+                newDrag();
+            }
+        });
+
+        document.getElementById('start').addEventListener('click', e => {
+            audio = new (window.AudioContext || window.webkitAudioContext)();
+            e.currentTarget.remove();
+            running = true;
+            resetMode();
+        });
+
+        function playChime() {
+            if (!audio) return;
+            const now = audio.currentTime;
+            const base = NOTES[Math.floor(Math.random() * 5)];
+            // little arpeggio: root, third, fifth
+            [1, 1.25, 1.5, 2].forEach((mult, i) => {
+                const osc = audio.createOscillator();
+                const gain = audio.createGain();
+                osc.type = i % 2 ? 'triangle' : 'sine';
+                osc.frequency.value = base * mult;
+                const t = now + i * 0.07;
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(0.25, t + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, t + 0.5);
+                osc.connect(gain).connect(audio.destination);
+                osc.start(t);
+                osc.stop(t + 0.55);
+            });
+        }
+
+        function playBlip() {
+            if (!audio) return;
+            const osc = audio.createOscillator();
+            const gain = audio.createGain();
+            osc.type = 'sine';
+            osc.frequency.value = NOTES[Math.floor(Math.random() * NOTES.length)] * 2;
+            gain.gain.setValueAtTime(0.03, audio.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.15);
+            osc.connect(gain).connect(audio.destination);
+            osc.start();
+            osc.stop(audio.currentTime + 0.16);
+        }
+
+        function playTick(noteIdx) {
+            if (!audio) return;
+            const osc = audio.createOscillator();
+            const gain = audio.createGain();
+            osc.type = 'triangle';
+            osc.frequency.value = NOTES[Math.min(noteIdx, NOTES.length - 1)];
+            gain.gain.setValueAtTime(0.15, audio.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.25);
+            osc.connect(gain).connect(audio.destination);
+            osc.start();
+            osc.stop(audio.currentTime + 0.26);
+        }
+
+        function playBoing() {
+            if (!audio) return;
+            const osc = audio.createOscillator();
+            const gain = audio.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(320, audio.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(110, audio.currentTime + 0.35);
+            gain.gain.setValueAtTime(0.25, audio.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.4);
+            osc.connect(gain).connect(audio.destination);
+            osc.start();
+            osc.stop(audio.currentTime + 0.41);
+        }
+
+        function spawnTarget() {
+            const r = 50 + Math.random() * 20;
+            const speed = (0.3 + score * 0.03) * ({ circle: 0.4, hold: 0.3, pick: 0.6 }[mode] || 1);
+            let emoji = EMOJIS[Math.floor(Math.random() * EMOJIS.length)];
+            let tHue = Math.random() * 360;
+            let good = true;
+            if (mode === 'pick') {
+                good = targets.filter(t => t.good).length < 2 || Math.random() < 0.35;
+                if (rule.byColor) {
+                    emoji = null;
+                    const others = PICK_COLORS.filter(([, h]) => h !== rule.value);
+                    tHue = good ? rule.value : others[Math.floor(Math.random() * others.length)][1];
+                } else {
+                    const others = PICK_EMOJIS.filter(([e]) => e !== rule.value);
+                    emoji = good ? rule.value : others[Math.floor(Math.random() * others.length)][0];
+                }
+            }
+            targets.push({
+                good,
+                kx: 0,
+                ky: 0,
+                boingAt: 0,
+                spin: 0,
+                lastAng: null,
+                progress: 0,
+                dir: 1,
+                quarters: 0,
+                x: r + Math.random() * (W - 2 * r),
+                y: r + 80 + Math.random() * (H - 2 * r - 80),
+                r,
+                emoji,
+                hue: tHue,
+                born: performance.now(),
+                vx: (Math.random() - 0.5) * speed,
+                vy: (Math.random() - 0.5) * speed,
+            });
+        }
+
+        function burst(x, y, h) {
+            for (let i = 0; i < 40; i++) {
+                const a = Math.random() * Math.PI * 2;
+                const s = 2 + Math.random() * 6;
+                particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1, hue: h + Math.random() * 60, size: 4 + Math.random() * 6 });
+            }
+        }
+
+        let lastBlip = 0;
+        function update(now) {
+            hue = (hue + 2) % 360;
+
+            const src = space && space.state === 'flying' ? space.rocket : invade ? invade.player : mouse;
+            const last = trail[trail.length - 1];
+            const moved = !last || Math.hypot(src.x - last.x, src.y - last.y) > 2;
+            if (moved) {
+                trail.push({ x: src.x, y: src.y, hue, life: 1 });
+                if (running && now - lastBlip > 120 && last && Math.hypot(src.x - last.x, src.y - last.y) > 25) {
+                    playBlip(); lastBlip = now;
+                }
+            }
+            for (const p of trail) p.life -= 0.012;
+            while (trail.length && trail[0].life <= 0) trail.shift();
+
+            for (const p of particles) { p.x += p.vx; p.y += p.vy; p.vy += 0.12; p.vx *= 0.98; p.life -= 0.015; }
+            for (let i = particles.length - 1; i >= 0; i--) if (particles[i].life <= 0) particles.splice(i, 1);
+
+            if (mode === 'dots') updateDots(now);
+            else if (mode === 'drag') updateDrag();
+            else if (mode === 'space') updateSpace(now);
+            else if (mode === 'alien') updateInvade(now);
+            else updateTargets(now);
+        }
+
+        function playSweep(type, from, to, dur, vol) {
+            if (!audio) return;
+            const osc = audio.createOscillator();
+            const gain = audio.createGain();
+            osc.type = type;
+            osc.frequency.setValueAtTime(from, audio.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(to, audio.currentTime + dur);
+            gain.gain.setValueAtTime(vol, audio.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + dur);
+            osc.connect(gain).connect(audio.destination);
+            osc.start();
+            osc.stop(audio.currentTime + dur + 0.01);
+        }
+
+        function playSadTrombone() {
+            if (!audio) return;
+            const t0 = audio.currentTime;
+            const filter = audio.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 900;
+            filter.connect(audio.destination);
+            [[392, 0, 0.35], [370, 0.4, 0.35], [349, 0.8, 1.2]].forEach(([freq, start, dur], i) => {
+                const osc = audio.createOscillator();
+                const gain = audio.createGain();
+                osc.type = 'sawtooth';
+                const t = t0 + start;
+                osc.frequency.setValueAtTime(freq, t);
+                if (i === 2) {
+                    osc.frequency.linearRampToValueAtTime(freq * 0.94, t + dur);
+                    const lfo = audio.createOscillator();
+                    const lfoGain = audio.createGain();
+                    lfo.frequency.value = 6;
+                    lfoGain.gain.value = 6;
+                    lfo.connect(lfoGain).connect(osc.frequency);
+                    lfo.start(t);
+                    lfo.stop(t + dur);
+                }
+                gain.gain.setValueAtTime(0, t);
+                gain.gain.linearRampToValueAtTime(0.12, t + 0.05);
+                gain.gain.setValueAtTime(0.12, t + dur - 0.15);
+                gain.gain.linearRampToValueAtTime(0, t + dur);
+                osc.connect(gain).connect(filter);
+                osc.start(t);
+                osc.stop(t + dur + 0.01);
+            });
+        }
+
+        function updateInvade(now) {
+            const s = invade, rk = s.rocket, p = s.player;
+            p.x += (mouse.x - p.x) * 0.2;
+            p.y = H - 90;
+
+            if (s.state === 'ready') {
+                if (now > s.until) s.state = 'flying';
+            } else if (s.state !== 'flying') {
+                if (now > s.until) newInvade(s.state === 'won' ? s.level + 1 : s.level);
+                return;
+            }
+
+            if (mouse.down && s.state === 'flying' && now - s.lastShot > 250) {
+                s.lastShot = now;
+                s.bolts.push({ x: p.x, y: p.y - 40 });
+                playSweep('square', 900, 250, 0.2, 0.04);
+            }
+
+            for (let i = s.bolts.length - 1; i >= 0; i--) {
+                const b = s.bolts[i];
+                b.y -= 12;
+                if (b.y < -40) { s.bolts.splice(i, 1); continue; }
+                if (s.state === 'flying' && Math.hypot(b.x - rk.x, b.y - rk.y) < rk.size * 0.62) {
+                    s.bolts.splice(i, 1);
+                    s.shields--;
+                    rk.size *= 1 - Math.min((s.level - 1) * 0.02, 0.2);
+                    rk.flash = now + 300;
+                    burst(rk.x, rk.y, 40);
+                    playTick(s.maxShields - s.shields + 2);
+                    if (s.shields === 0) {
+                        s.state = 'won';
+                        s.until = now + 3000;
+                        s.bolts.length = 0;
+                        playSweep('sawtooth', 300, 40, 0.8, 0.15);
+                        for (let k = 0; k < 4; k++) burst(rk.x, rk.y, k * 90);
+                        addScore(rk.x, rk.y, 30);
+                        celebrate();
+                        break;
+                    }
+                }
+            }
+
+            if (s.state !== 'flying') return;
+            // from level 8 the rocket speeds up when a laser is right below it
+            const danger = s.level >= 8 && s.bolts.some(b => Math.abs(b.x - rk.x) < 70 && b.y > rk.y && b.y - rk.y < 250);
+            const speed = Math.min(0.9 + s.level * 0.15, 3.5) * (danger ? 1.6 : 1);
+            const prevX = rk.x, prevY = rk.y;
+            rk.t += speed;
+            rk.x += s.dir * speed;
+            const amp = Math.min((s.level - 1) * H * 0.015, H * 0.25) * Math.min(1, Math.abs(s.moon.x - rk.x) / 250);
+            rk.y = rk.baseY + Math.sin(rk.t / Math.max(40, 90 - s.level * 3)) * amp;
+            rk.angle = Math.atan2(rk.y - prevY, rk.x - prevX);
+            if ((s.moon.x - rk.x) * s.dir <= 0) {
+                s.state = 'lost';
+                s.until = now + 2500;
+                s.bolts.length = 0;
+                playSadTrombone();
+            }
+        }
+
+        function updateSpace(now) {
+            const s = space, rk = s.rocket;
+            if (s.state === 'ready') {
+                if (Math.hypot(mouse.x - rk.x, mouse.y - rk.y) < 60) {
+                    s.state = 'flying';
+                    playSweep('sine', 200, 800, 0.5, 0.15);
+                    s.aliens.forEach((a, i) => a.nextShot = now + 1000 + i * 1000);
+                }
+            } else if (s.state === 'flying') {
+                const dx = mouse.x - rk.x, dy = mouse.y - rk.y;
+                const dist = Math.hypot(dx, dy);
+                const step = Math.min(dist * 0.06, 2.2);
+                if (dist > 1) { rk.x += dx / dist * step; rk.y += dy / dist * step; }
+                if (step > 0.8) {
+                    let da = Math.atan2(dy, dx) - rk.angle;
+                    da = Math.atan2(Math.sin(da), Math.cos(da));
+                    rk.angle += da * 0.2;
+                }
+                if (Math.hypot(rk.x - s.moon.x, rk.y - s.moon.y) < s.moon.r * 0.5) {
+                    s.state = 'won';
+                    s.until = now + 3000;
+                    s.bolts.length = 0;
+                    addScore(s.moon.x, s.moon.y, 50);
+                    celebrate();
+                }
+            } else if (now > s.until) {
+                newSpace(s.state === 'won' ? s.level + 1 : s.level);
+                return;
+            }
+
+            const interval = Math.max(1000, 2200 - s.level * 150);
+            const spreadChance = Math.min(0.2 * (s.level - 1), 0.8);
+            const spreadAngles = s.level >= 6 ? [-0.5, -0.25, 0, 0.25, 0.5] : [-0.3, 0, 0.3];
+            if (s.level >= 4) s.moon.y = s.moon.baseY + Math.sin(now / 1500) * H * Math.min(0.3, (s.level - 3) * 0.1);
+            for (const a of s.aliens) {
+                if (a.axis === 'x') a.x = W / 2 + Math.sin(now / 2500 + a.phase) * W * 0.25;
+                else a.y = H / 2 + Math.sin(now / 2000 + a.phase) * H * 0.3;
+                a.charging = s.state === 'flying' && now > a.nextShot - 700;
+                if (s.state === 'flying' && now >= a.nextShot) {
+                    const aim = Math.atan2(rk.y - a.y, rk.x - a.x);
+                    const speed = Math.min(2.8 + s.level * 0.35, 6);
+                    const spread = Math.random() < spreadChance ? spreadAngles : [0];
+                    for (const off of spread) {
+                        s.bolts.push({ x: a.x, y: a.y, vx: Math.cos(aim + off) * speed, vy: Math.sin(aim + off) * speed, hue: a.hue });
+                    }
+                    a.nextShot = now + interval + Math.random() * 600;
+                    playSweep('square', 900, 250, 0.2, 0.04);
+                }
+            }
+
+            for (let i = s.bolts.length - 1; i >= 0; i--) {
+                const b = s.bolts[i];
+                b.x += b.vx; b.y += b.vy;
+                if (b.x < -50 || b.x > W + 50 || b.y < -50 || b.y > H + 50) { s.bolts.splice(i, 1); continue; }
+                if (s.state === 'flying' && now > rk.inv && Math.hypot(b.x - rk.x, b.y - rk.y) < 28) {
+                    s.bolts.splice(i, 1);
+                    s.lives--;
+                    rk.inv = now + 1500;
+                    burst(rk.x, rk.y, 20);
+                    playSweep('sawtooth', 220, 60, 0.5, 0.12);
+                    if (s.lives === 0) {
+                        s.state = 'lost';
+                        s.until = now + 2500;
+                        s.bolts.length = 0;
+                        break;
+                    }
+                }
+            }
+        }
+
+        function updateTargets(now) {
+            for (let i = targets.length - 1; i >= 0; i--) {
+                const t = targets[i];
+                const d = Math.hypot(mouse.x - t.x, mouse.y - t.y);
+                if (!(mode === 'hold' && d < t.r)) {
+                    t.x += t.vx + t.kx; t.y += t.vy + t.ky;
+                }
+                t.kx *= 0.9; t.ky *= 0.9;
+                t.x = Math.min(Math.max(t.x, t.r), W - t.r);
+                t.y = Math.min(Math.max(t.y, t.r + 60), H - t.r);
+                if (t.x <= t.r || t.x >= W - t.r) t.vx *= -1;
+                if (t.y <= t.r + 60 || t.y >= H - t.r) t.vy *= -1;
+                if (mode === 'pick') {
+                    if (d < t.r) {
+                        if (t.good) catchTarget(i);
+                        else {
+                            // wrong piece hops away with a silly boing, no penalty
+                            const nx = (t.x - mouse.x) / (d || 1), ny = (t.y - mouse.y) / (d || 1);
+                            t.kx = nx * 10; t.ky = ny * 10;
+                            if (now - t.boingAt > 400) { playBoing(); t.boingAt = now; }
+                        }
+                    }
+                    continue;
+                }
+                if (mode === 'touch') {
+                    if (d < t.r) catchTarget(i);
+                    continue;
+                }
+                if (mode === 'hold') {
+                    t.progress = d < t.r ? t.progress + 1 / 70 : Math.max(0, t.progress - 0.02);
+                } else if (d > t.r * 0.5 && d < t.r * 4) {
+                    // circle mode: accumulate how far the pointer has wound around the target
+                    const ang = Math.atan2(mouse.y - t.y, mouse.x - t.x);
+                    if (t.lastAng !== null) {
+                        let delta = ang - t.lastAng;
+                        if (delta > Math.PI) delta -= Math.PI * 2;
+                        else if (delta < -Math.PI) delta += Math.PI * 2;
+                        t.spin += delta;
+                    }
+                    t.lastAng = ang;
+                } else {
+                    t.lastAng = null;
+                    t.spin *= 0.97;
+                }
+                if (mode === 'circle') {
+                    t.spin *= 0.998;
+                    t.progress = Math.abs(t.spin) / (Math.PI * 2);
+                    t.dir = t.spin < 0 ? -1 : 1;
+                }
+                const q = Math.floor(t.progress * 4);
+                if (q > t.quarters) playTick(q * 2);
+                t.quarters = q;
+                if (t.progress >= 1) catchTarget(i);
+            }
+        }
+
+        function newDots() {
+            const s = SHAPES[dotShape++ % SHAPES.length];
+            const scale = Math.min(W, H) * 0.32, cx = W / 2, cy = H / 2 + 30;
+            dots = { reward: s.reward, pts: s.pts.map(([x, y]) => ({ x: cx + x * scale, y: cy + y * scale })), next: 0, done: false, doneAt: 0, cx, cy };
+        }
+
+        function updateDots(now) {
+            if (dots.done) {
+                if (now - dots.doneAt > 2500) newDots();
+                return;
+            }
+            const p = dots.pts[dots.next];
+            if (Math.hypot(mouse.x - p.x, mouse.y - p.y) < 40) {
+                burst(p.x, p.y, hue);
+                playTick(dots.next % NOTES.length);
+                dots.next++;
+                if (dots.next === dots.pts.length) {
+                    dots.done = true;
+                    dots.doneAt = now;
+                    addScore(dots.cx, dots.cy, hue);
+                    celebrate();
+                }
+            }
+        }
+
+        function newDrag() {
+            const [item, home] = PAIRS[Math.floor(Math.random() * PAIRS.length)];
+            const left = Math.random() < 0.5;
+            drag = {
+                item: { emoji: item, x: W * (left ? 0.2 : 0.8), y: H * (0.3 + Math.random() * 0.5), r: 55 },
+                home: { emoji: home, x: W * (left ? 0.8 : 0.2), y: H * (0.3 + Math.random() * 0.5), r: 90 },
+                held: false,
+                hue: Math.random() * 360,
+            };
+        }
+
+        function updateDrag() {
+            if (drag.held) { drag.item.x = mouse.x; drag.item.y = mouse.y; }
+        }
+
+        function addScore(x, y, h) {
+            burst(x, y, h);
+            playChime();
+            score++;
+            scoreEl.textContent = '⭐ ' + score;
+        }
+
+        function catchTarget(i) {
+            const t = targets[i];
+            targets.splice(i, 1);
+            addScore(t.x, t.y, t.hue);
+            if (mode === 'pick') {
+                if (++ruleCount >= 5) { celebrate(); newRule(); }
+                else spawnTarget();
+                return;
+            }
+            spawnTarget();
+            if (score % 5 === 0) { celebrate(); spawnTarget(); }
+        }
+
+        function celebrate() {
+            for (let i = 0; i < 6; i++) setTimeout(() => {
+                burst(Math.random() * W, Math.random() * H * 0.6, Math.random() * 360);
+                playChime();
+            }, i * 150);
+        }
+
+        function draw(now) {
+            ctx.fillStyle = 'rgba(17,17,17,0.25)';
+            ctx.fillRect(0, 0, W, H);
+
+            // rainbow trail
+            ctx.lineCap = 'round';
+            for (let i = 1; i < trail.length; i++) {
+                const a = trail[i - 1], b = trail[i];
+                ctx.strokeStyle = `hsla(${b.hue},100%,60%,${b.life})`;
+                ctx.lineWidth = 6 + 24 * b.life;
+                ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+            }
+
+            // targets
+            for (const t of targets) {
+                const pulse = 1 + Math.sin((now - t.born) / 250) * 0.08;
+                const r = t.r * pulse;
+                if (!t.emoji) {
+                    const ball = ctx.createRadialGradient(t.x - r * 0.3, t.y - r * 0.3, r * 0.1, t.x, t.y, r);
+                    ball.addColorStop(0, `hsl(${t.hue},100%,85%)`);
+                    ball.addColorStop(1, `hsl(${t.hue},90%,45%)`);
+                    ctx.fillStyle = ball;
+                    ctx.beginPath(); ctx.arc(t.x, t.y, r, 0, Math.PI * 2); ctx.fill();
+                    continue;
+                }
+                const g = ctx.createRadialGradient(t.x, t.y, 0, t.x, t.y, r * 1.4);
+                g.addColorStop(0, `hsla(${t.hue},100%,70%,0.9)`);
+                g.addColorStop(1, `hsla(${t.hue},100%,50%,0)`);
+                ctx.fillStyle = g;
+                ctx.beginPath(); ctx.arc(t.x, t.y, r * 1.4, 0, Math.PI * 2); ctx.fill();
+                ctx.font = `${r * 1.2}px serif`;
+                ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+                ctx.fillText(t.emoji, t.x, t.y + 4);
+
+                if (mode === 'circle') {
+                    ctx.lineWidth = 3;
+                    ctx.setLineDash([8, 10]);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+                    ctx.beginPath(); ctx.arc(t.x, t.y, t.r * 1.8, 0, Math.PI * 2); ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+                if (t.progress > 0.01) {
+                    ctx.lineWidth = 10;
+                    ctx.strokeStyle = `hsl(${t.hue},100%,65%)`;
+                    ctx.beginPath();
+                    ctx.arc(t.x, t.y, t.r * (mode === 'circle' ? 1.8 : 1.15), -Math.PI / 2, -Math.PI / 2 + t.dir * t.progress * Math.PI * 2, t.dir < 0);
+                    ctx.stroke();
+                }
+            }
+
+            if (dots) drawDots(now);
+            if (drag) drawDrag(now);
+            if (space) drawSpace(now);
+            if (invade) drawInvade(now);
+
+            // particles
+            for (const p of particles) {
+                ctx.fillStyle = `hsla(${p.hue},100%,60%,${p.life})`;
+                ctx.beginPath(); ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2); ctx.fill();
+            }
+
+            // cursor
+            const small = (space && space.state === 'flying') || invade;
+            ctx.globalAlpha = small ? 0.4 : 1;
+            ctx.fillStyle = `hsl(${hue},100%,65%)`;
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 4;
+            ctx.beginPath(); ctx.arc(mouse.x, mouse.y, small ? 10 : 18, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+
+        function drawSpace(now) {
+            const s = space, rk = s.rocket, m = s.moon;
+            for (const st of s.stars) {
+                ctx.fillStyle = `rgba(255,255,255,${0.5 + 0.4 * Math.sin(now / 600 + st.p)})`;
+                ctx.fillRect(st.x, st.y, st.s, st.s);
+            }
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+            const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.r * 1.8);
+            g.addColorStop(0, 'rgba(255,240,150,0.6)');
+            g.addColorStop(1, 'rgba(255,240,150,0)');
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 1.8, 0, Math.PI * 2); ctx.fill();
+            ctx.font = `${m.r * 1.6}px serif`;
+            ctx.fillText('🌕', m.x, m.y + 4);
+
+            for (const a of s.aliens) {
+                if (a.charging) {
+                    const k = Math.max(0, Math.min(1, 1 - (a.nextShot - now) / 700));
+                    ctx.fillStyle = `hsla(${a.hue},100%,60%,${0.2 + 0.4 * k})`;
+                    ctx.beginPath(); ctx.arc(a.x, a.y, 30 + 30 * k, 0, Math.PI * 2); ctx.fill();
+                }
+                ctx.font = '64px serif';
+                ctx.fillText(a.emoji, a.x, a.y + 4);
+            }
+
+            ctx.lineCap = 'round';
+            for (const b of s.bolts) {
+                ctx.strokeStyle = `hsla(${b.hue},100%,60%,0.5)`;
+                ctx.lineWidth = 14;
+                ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x - b.vx * 6, b.y - b.vy * 6); ctx.stroke();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 4;
+                ctx.stroke();
+            }
+
+            const blink = now < rk.inv && Math.floor(now / 100) % 2;
+            if (s.state !== 'lost' && !blink) {
+                if (s.state === 'ready') {
+                    ctx.lineWidth = 4;
+                    ctx.setLineDash([10, 10]);
+                    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+                    ctx.beginPath(); ctx.arc(rk.x, rk.y, 55 + Math.sin(now / 200) * 6, 0, Math.PI * 2); ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+                ctx.save();
+                ctx.translate(rk.x, rk.y);
+                // the rocket emoji points up-right, so offset by 45deg
+                ctx.rotate(rk.angle + Math.PI / 4);
+                ctx.font = '56px serif';
+                ctx.fillText('🚀', 0, 0);
+                ctx.restore();
+            }
+
+            ctx.font = '40px serif';
+            ctx.textAlign = 'left';
+            ctx.fillText('❤️'.repeat(s.lives) + '🤍'.repeat(4 - s.lives), 24, 100);
+            ctx.font = '32px sans-serif';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`Level ${s.level}`, 24, 150);
+            ctx.textAlign = 'center';
+
+            if (s.state === 'won' || s.state === 'lost') {
+                ctx.font = `${Math.min(W, H) * 0.12}px sans-serif`;
+                ctx.fillStyle = '#fff';
+                ctx.fillText(s.state === 'won' ? '🎉 You made it! 🌕' : '💥 Try again! 🚀', W / 2, H / 2);
+            }
+        }
+
+        function drawInvade(now) {
+            const s = invade, rk = s.rocket, m = s.moon, p = s.player;
+            for (const st of s.stars) {
+                ctx.fillStyle = `rgba(255,255,255,${0.5 + 0.4 * Math.sin(now / 600 + st.p)})`;
+                ctx.fillRect(st.x, st.y, st.s, st.s);
+            }
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+
+            const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.r * 1.8);
+            g.addColorStop(0, 'rgba(255,240,150,0.6)');
+            g.addColorStop(1, 'rgba(255,240,150,0)');
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.arc(m.x, m.y, m.r * 1.8, 0, Math.PI * 2); ctx.fill();
+            ctx.font = `${m.r * 1.6}px serif`;
+            ctx.fillText('🌕', m.x, m.y + 4);
+
+            ctx.lineCap = 'round';
+            for (const b of s.bolts) {
+                ctx.strokeStyle = 'hsla(120,100%,60%,0.5)';
+                ctx.lineWidth = 14;
+                ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x, b.y + 50); ctx.stroke();
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 4;
+                ctx.stroke();
+            }
+
+            if (s.state !== 'won') {
+                if (now < rk.flash) {
+                    ctx.fillStyle = 'rgba(255,120,60,0.6)';
+                    ctx.beginPath(); ctx.arc(rk.x, rk.y, rk.size * 0.7, 0, Math.PI * 2); ctx.fill();
+                }
+                ctx.save();
+                ctx.translate(rk.x, rk.y);
+                ctx.rotate(rk.angle + Math.PI / 4);
+                ctx.font = `${rk.size}px serif`;
+                ctx.fillText('🚀', 0, 0);
+                ctx.restore();
+            }
+
+            const pg = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, 70);
+            pg.addColorStop(0, `hsla(120,100%,60%,${now - s.lastShot < 150 ? 0.8 : 0.35})`);
+            pg.addColorStop(1, 'hsla(120,100%,60%,0)');
+            ctx.fillStyle = pg;
+            ctx.beginPath(); ctx.arc(p.x, p.y, 70, 0, Math.PI * 2); ctx.fill();
+            ctx.font = '72px serif';
+            ctx.fillText('🛸', p.x, p.y);
+            ctx.font = '36px serif';
+            ctx.fillText('👽', p.x, p.y - 22);
+
+            ctx.textAlign = 'left';
+            ctx.font = '36px serif';
+            ctx.fillText('🛡️'.repeat(s.shields) + '⬛'.repeat(s.maxShields - s.shields), 24, 100);
+            ctx.font = '32px sans-serif';
+            ctx.fillStyle = '#fff';
+            ctx.fillText(`Level ${s.level}`, 24, 150);
+            ctx.textAlign = 'center';
+
+            const msg = { ready: '👽 Click to shoot! 🔫', won: '💥 You got it! 👽', lost: '🚀 It escaped! Try again' }[s.state];
+            if (msg) {
+                ctx.font = `${Math.min(W, H) * 0.08}px sans-serif`;
+                ctx.fillStyle = '#fff';
+                ctx.fillText(msg, W / 2, H * 0.6);
+            }
+        }
+
+        function drawDots(now) {
+            const pts = dots.pts;
+            ctx.lineCap = 'round';
+            ctx.lineWidth = 10;
+            const segs = dots.done ? pts.length : dots.next - 1;
+            for (let i = 0; i < segs; i++) {
+                const a = pts[i], b = pts[(i + 1) % pts.length];
+                ctx.strokeStyle = `hsl(${i * 36},100%,60%)`;
+                ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+            }
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            pts.forEach((p, i) => {
+                const isNext = !dots.done && i === dots.next;
+                const r = isNext ? 34 + Math.sin(now / 150) * 6 : 28;
+                ctx.fillStyle = i < dots.next ? `hsl(${i * 36},100%,60%)` : isNext ? '#fff' : 'rgba(255,255,255,0.25)';
+                ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+                ctx.fillStyle = isNext ? '#f0f' : '#111';
+                ctx.font = 'bold 30px sans-serif';
+                ctx.fillText(i + 1, p.x, p.y + 2);
+            });
+            if (dots.done) {
+                const size = Math.min(1, (now - dots.doneAt) / 400) * Math.min(W, H) * 0.3;
+                ctx.font = `${size}px serif`;
+                ctx.fillText(dots.reward, dots.cx, dots.cy);
+            }
+        }
+
+        function drawDrag(now) {
+            const { item, home } = drag;
+            const near = Math.hypot(item.x - home.x, item.y - home.y) < home.r;
+            const g = ctx.createRadialGradient(home.x, home.y, 0, home.x, home.y, home.r * 1.3);
+            g.addColorStop(0, `hsla(${drag.hue},100%,70%,${near ? 1 : 0.6})`);
+            g.addColorStop(1, `hsla(${drag.hue},100%,50%,0)`);
+            ctx.fillStyle = g;
+            ctx.beginPath(); ctx.arc(home.x, home.y, home.r * 1.3, 0, Math.PI * 2); ctx.fill();
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.font = `${home.r * 1.3}px serif`;
+            ctx.fillText(home.emoji, home.x, home.y + 4);
+
+            if (!drag.held) {
+                ctx.setLineDash([12, 14]);
+                ctx.lineDashOffset = -now / 30;
+                ctx.lineWidth = 4;
+                ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+                ctx.beginPath(); ctx.moveTo(item.x, item.y); ctx.lineTo(home.x, home.y); ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.lineDashOffset = 0;
+            }
+
+            ctx.save();
+            ctx.translate(item.x, item.y);
+            ctx.rotate(drag.held ? 0 : Math.sin(now / 200) * 0.2);
+            ctx.font = `${item.r * (drag.held ? 1.6 : 1.4)}px serif`;
+            ctx.fillText(item.emoji, 0, 4);
+            ctx.restore();
+        }
+
+        function loop(now) {
+            update(now);
+            draw(now);
+            requestAnimationFrame(loop);
+        }
+        requestAnimationFrame(loop);
+    </script>
+</body>
+
+</html>
